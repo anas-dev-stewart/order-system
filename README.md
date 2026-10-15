@@ -36,13 +36,16 @@ database, plus an Angular front end. Built from `Assignment.md`.
 ## 1. Set up the databases
 
 Each service manages its own database via EF Core migrations — no manual
-SQL needed. From a clean checkout:
+SQL needed. From a clean checkout, restore packages before running any
+`dotnet ef` command (the EF CLI tool does not restore automatically):
 
 ```bash
 cd product-service/ProductService.Api
+dotnet restore
 dotnet ef database update
 
 cd ../../order-service/OrderService.Api
+dotnet restore
 dotnet ef database update
 ```
 
