@@ -1,0 +1,31 @@
+.app-header {
+  display: flex;
+  align-items: center;
+  gap: 2rem;
+  padding: 1rem 1.5rem;
+  background: #1f2937;
+  color: white;
+}
+
+.app-header h1 {
+  margin: 0;
+  font-size: 1.25rem;
+}
+
+.app-header nav a {
+  color: #cbd5e1;
+  text-decoration: none;
+  margin-right: 1rem;
+  font-weight: 500;
+}
+
+.app-header nav a.active,
+.app-header nav a:hover {
+  color: white;
+}
+
+main {
+  padding: 1.5rem;
+  max-width: 960px;
+  margin: 0 auto;
+}

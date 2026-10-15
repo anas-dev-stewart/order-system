@@ -1,0 +1,82 @@
+<h2>Products</h2>
+
+<div class="error-banner" *ngIf="errorMessage">{{ errorMessage }}</div>
+
+<div class="card">
+  <h3>Add product</h3>
+  <div class="form-row">
+    <div class="form-field">
+      <label for="newName">Name</label>
+      <input id="newName" type="text" [(ngModel)]="newName" placeholder="Product name" />
+    </div>
+    <div class="form-field">
+      <label for="newPrice">Price</label>
+      <input id="newPrice" type="number" [(ngModel)]="newPrice" min="0.01" step="0.01" placeholder="0.00" />
+    </div>
+    <div class="form-field">
+      <label for="newStock">Stock</label>
+      <input id="newStock" type="number" [(ngModel)]="newStock" min="0" placeholder="0" />
+    </div>
+    <button class="primary" (click)="addProduct()">Add product</button>
+  </div>
+</div>
+
+<div class="card">
+  <input
+    type="text"
+    placeholder="Search by name..."
+    [(ngModel)]="searchTerm"
+    (ngModelChange)="onSearchChange()"
+    aria-label="Search products"
+  />
+</div>
+
+<p *ngIf="loading">Loading products...</p>
+
+<table *ngIf="!loading">
+  <thead>
+    <tr>
+      <th>Name</th>
+      <th class="sortable" (click)="toggleSortByPrice()">
+        Price
+        <span *ngIf="sortDirection === 'asc'">&uarr;</span>
+        <span *ngIf="sortDirection === 'desc'">&darr;</span>
+      </th>
+      <th>Stock</th>
+      <th>Actions</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr *ngFor="let product of pagedProducts">
+      <ng-container *ngIf="editingId === product.id; else viewRow">
+        <td><input type="text" [(ngModel)]="editName" /></td>
+        <td><input type="number" [(ngModel)]="editPrice" min="0.01" step="0.01" /></td>
+        <td><input type="number" [(ngModel)]="editStock" min="0" /></td>
+        <td>
+          <button class="primary" (click)="saveEdit()">Save</button>
+          <button (click)="cancelEdit()">Cancel</button>
+        </td>
+      </ng-container>
+      <ng-template #viewRow>
+        <td>{{ product.name }}</td>
+        <td>{{ product.price | number: '1.2-2' }}</td>
+        <td>{{ product.stockQuantity }}</td>
+        <td>
+          <button (click)="startEdit(product)">Edit</button>
+          <button class="danger" (click)="deleteProduct(product)">Delete</button>
+        </td>
+      </ng-template>
+    </tr>
+    <tr *ngIf="pagedProducts.length === 0">
+      <td colspan="4">No products found.</td>
+    </tr>
+  </tbody>
+</table>
+
+<div class="form-row" *ngIf="!loading" style="margin-top: 1rem; justify-content: space-between;">
+  <span>Page {{ currentPage }} of {{ totalPages }}</span>
+  <div>
+    <button (click)="goToPreviousPage()" [disabled]="currentPage === 1">Previous</button>
+    <button (click)="goToNextPage()" [disabled]="currentPage === totalPages">Next</button>
+  </div>
+</div>

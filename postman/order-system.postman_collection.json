@@ -1,0 +1,156 @@
+{
+  "info": {
+    "name": "Order System",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+    "_postman_id": "a3f2a7b0-6a9e-4e9b-8a0e-order-system-collection"
+  },
+  "variable": [
+    { "key": "productBaseUrl", "value": "http://localhost:5001" },
+    { "key": "orderBaseUrl", "value": "http://localhost:5002" },
+    { "key": "productId", "value": "1" },
+    { "key": "orderId", "value": "1" }
+  ],
+  "item": [
+    {
+      "name": "Product Service",
+      "item": [
+        {
+          "name": "Get all products",
+          "request": {
+            "method": "GET",
+            "url": "{{productBaseUrl}}/api/products"
+          }
+        },
+        {
+          "name": "Get product by id",
+          "request": {
+            "method": "GET",
+            "url": "{{productBaseUrl}}/api/products/{{productId}}"
+          }
+        },
+        {
+          "name": "Create product",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Laptop\",\n  \"price\": 1200,\n  \"stockQuantity\": 10\n}"
+            },
+            "url": "{{productBaseUrl}}/api/products"
+          }
+        },
+        {
+          "name": "Create product - invalid (400)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"\",\n  \"price\": 0,\n  \"stockQuantity\": -1\n}"
+            },
+            "url": "{{productBaseUrl}}/api/products"
+          }
+        },
+        {
+          "name": "Update product",
+          "request": {
+            "method": "PUT",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Laptop Pro\",\n  \"price\": 1500,\n  \"stockQuantity\": 12\n}"
+            },
+            "url": "{{productBaseUrl}}/api/products/{{productId}}"
+          }
+        },
+        {
+          "name": "Delete product",
+          "request": {
+            "method": "DELETE",
+            "url": "{{productBaseUrl}}/api/products/{{productId}}"
+          }
+        },
+        {
+          "name": "Reduce stock",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"quantity\": 2\n}"
+            },
+            "url": "{{productBaseUrl}}/api/products/{{productId}}/reduce-stock"
+          }
+        },
+        {
+          "name": "Reduce stock - insufficient (409)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"quantity\": 999999\n}"
+            },
+            "url": "{{productBaseUrl}}/api/products/{{productId}}/reduce-stock"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Order Service",
+      "item": [
+        {
+          "name": "Place order",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"customerName\": \"Ali\",\n  \"productId\": {{productId}},\n  \"quantity\": 2\n}"
+            },
+            "url": "{{orderBaseUrl}}/api/orders"
+          }
+        },
+        {
+          "name": "Place order - product not found (404)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"customerName\": \"Ali\",\n  \"productId\": 999999,\n  \"quantity\": 1\n}"
+            },
+            "url": "{{orderBaseUrl}}/api/orders"
+          }
+        },
+        {
+          "name": "Place order - invalid (400)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"customerName\": \"\",\n  \"productId\": {{productId}},\n  \"quantity\": 0\n}"
+            },
+            "url": "{{orderBaseUrl}}/api/orders"
+          }
+        },
+        {
+          "name": "Get all orders",
+          "request": {
+            "method": "GET",
+            "url": "{{orderBaseUrl}}/api/orders"
+          }
+        },
+        {
+          "name": "Get order by id",
+          "request": {
+            "method": "GET",
+            "url": "{{orderBaseUrl}}/api/orders/{{orderId}}"
+          }
+        }
+      ]
+    }
+  ]
+}

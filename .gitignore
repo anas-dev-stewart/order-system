@@ -1,0 +1,20 @@
+## .NET
+bin/
+obj/
+
+## Angular / Node
+node_modules/
+dist/
+.angular/
+
+## IDE
+.vs/
+.vscode/
+*.user
+
+## OS
+.DS_Store
+Thumbs.db
+
+## Runtime logs from local testing
+*.log
