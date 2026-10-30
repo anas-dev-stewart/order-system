@@ -34,6 +34,26 @@ builder.Services.AddCors(options =>
 
 var app = builder.Build();
 
+using (var scope = app.Services.CreateScope())
+{
+    var db = scope.ServiceProvider.GetRequiredService<OrderDbContext>();
+    for (var attempt = 1; ; attempt++)
+    {
+        try
+        {
+            db.Database.Migrate();
+            break;
+        }
+        catch (Exception) when (attempt < 10)
+        {
+            // The SQL Server container can take a few seconds to accept
+            // connections after it reports "healthy" — retry instead of
+            // crashing on the first attempt.
+            Thread.Sleep(TimeSpan.FromSeconds(3));
+        }
+    }
+}
+
 if (app.Environment.IsDevelopment())
 {
     app.MapOpenApi();

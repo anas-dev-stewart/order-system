@@ -125,17 +125,75 @@ covers every endpoint of both services, including the validation/error
 cases (400, 404, 409, 503). Collection variables `productBaseUrl` and
 `orderBaseUrl` default to `http://localhost:5001` / `http://localhost:5002`.
 
+## 6. Run everything with Docker Compose
+
+No local SQL Server, .NET SDK, or Node install needed for this path — only
+Docker Desktop (with the Docker CLI and Docker Compose, which it bundles).
+
+> **On the Stewart corporate network**: `docker-ca-certs/` contains the
+> corporate TLS-inspection root CAs (Netskope + Stewart root CAs — public
+> certificates only, no private keys). Each Dockerfile installs them into
+> the container's trust store before `dotnet restore` / `npm ci`, otherwise
+> those commands fail with `UntrustedRoot` / "TLS: server certificate not
+> trusted" because the container doesn't know about the corporate proxy
+> that intercepts outbound HTTPS. If you're building this from a different
+> network, these certs are harmless no-ops and can be left as-is.
+
+From the repo root:
+
+```bash
+docker compose up --build
+```
+
+This builds and starts four containers:
+
+- `sqlserver` — SQL Server 2022 (Linux container), with a named volume
+  (`mssql-data`) so data survives a restart. Both `ProductDb` and `OrderDb`
+  live on this one instance, matching the spec's "two databases on one
+  local SQL Server" (section 4) — the services still never cross into
+  each other's database.
+- `product-service` — built from `product-service/ProductService.Api/Dockerfile`,
+  published and run on `:8080` inside the container, mapped to
+  **http://localhost:5001**.
+- `order-service` — built from `order-service/OrderService.Api/Dockerfile`,
+  mapped to **http://localhost:5002**. Reaches Product Service over the
+  Docker network at `http://product-service:8080` (set via the
+  `ProductService__BaseUrl` environment variable in `docker-compose.yml`
+  — no code change, same config-driven pattern as `appsettings.json`).
+- `web-app` — Angular app built and served by nginx, mapped to
+  **http://localhost:4200**.
+
+Both API containers run EF Core migrations automatically on startup
+(`Database.Migrate()`, with a short retry loop in case SQL Server reports
+"healthy" a few seconds before it actually accepts connections) — no
+manual `dotnet ef database update` step required in Docker.
+
+Useful commands:
+
+```bash
+docker compose up --build      # build images and start everything, logs attached
+docker compose up -d --build   # same, but detached (runs in the background)
+docker compose down            # stop and remove containers (keeps the DB volume)
+docker compose down -v         # also wipes the SQL Server data volume
+docker compose logs -f order-service   # tail one service's logs
+```
+
+The default SA password is `Your_password123!` (set in `docker-compose.yml`).
+Override it by creating a `.env` file next to `docker-compose.yml` with
+`SA_PASSWORD=<your-password>` — Compose picks it up automatically.
+
 ## Project layout
 
 ```
 /order-system
+  docker-compose.yml         # Runs all 4 containers (SQL Server + both APIs + Angular)
   /product-service
-    ProductService.Api      # Controllers, Services, Data (DbContext), Models, Dtos
+    ProductService.Api      # Controllers, Services, Data (DbContext), Models, Dtos, Dockerfile
     ProductService.Tests    # xUnit tests
   /order-service
-    OrderService.Api        # Controllers, Services, Data, Models, Dtos, Clients (Product HTTP client)
+    OrderService.Api        # Controllers, Services, Data, Models, Dtos, Clients (Product HTTP client), Dockerfile
     OrderService.Tests      # xUnit tests
-  /web-app                  # Angular app (standalone components)
+  /web-app                  # Angular app (standalone components), Dockerfile + nginx.conf
   /postman                  # Exported Postman collection
   README.md
 ```
