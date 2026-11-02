@@ -1,3 +1,4 @@
+using MassTransit;
 using Microsoft.EntityFrameworkCore;
 using OrderService.Api.Models;
 
@@ -10,4 +11,25 @@ public class OrderDbContext : DbContext
     }
 
     public DbSet<Order> Orders => Set<Order>();
+
+    protected override void OnModelCreating(ModelBuilder modelBuilder)
+    {
+        base.OnModelCreating(modelBuilder);
+
+        modelBuilder.Entity<Order>()
+            .HasIndex(o => o.IdempotencyKey)
+            .IsUnique()
+            .HasFilter("[IdempotencyKey] IS NOT NULL");
+
+        // MassTransit's transactional outbox: messages published inside the
+        // same DbContext.SaveChangesAsync() as an Order insert are written
+        // to these tables in the SAME database transaction, then relayed to
+        // RabbitMQ by a background delivery service. This guarantees we
+        // never save an order without (eventually) publishing its
+        // OrderSubmitted event, and never publish one for an order that
+        // failed to save.
+        modelBuilder.AddInboxStateEntity();
+        modelBuilder.AddOutboxMessageEntity();
+        modelBuilder.AddOutboxStateEntity();
+    }
 }

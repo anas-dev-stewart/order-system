@@ -15,26 +15,22 @@ public class OrdersController : ControllerBase
         _orderService = orderService;
     }
 
+    /// <summary>
+    /// Accepts an order and returns immediately with Status = Submitted.
+    /// Stock validation and pricing happen asynchronously; poll
+    /// GET /api/orders/{id} to see the order move to Approved or Rejected.
+    ///
+    /// Pass an "Idempotency-Key" header to make retries of the same logical
+    /// request safe — resubmitting the same key returns the original order
+    /// instead of creating a second one.
+    /// </summary>
     [HttpPost]
-    public async Task<ActionResult<OrderResponse>> Create(OrderCreateRequest request)
+    public async Task<ActionResult<OrderResponse>> Create(
+        OrderCreateRequest request,
+        [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey)
     {
-        try
-        {
-            var created = await _orderService.PlaceOrderAsync(request);
-            return CreatedAtAction(nameof(GetById), new { id = created.Id }, created);
-        }
-        catch (ProductNotFoundException ex)
-        {
-            return NotFound(new ErrorResponse(ex.Message));
-        }
-        catch (InsufficientStockException ex)
-        {
-            return Conflict(new ErrorResponse(ex.Message));
-        }
-        catch (ProductServiceUnavailableException ex)
-        {
-            return StatusCode(StatusCodes.Status503ServiceUnavailable, new ErrorResponse(ex.Message));
-        }
+        var created = await _orderService.PlaceOrderAsync(request, idempotencyKey);
+        return CreatedAtAction(nameof(GetById), new { id = created.Id }, created);
     }
 
     [HttpGet]

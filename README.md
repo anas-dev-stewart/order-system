@@ -1,43 +1,181 @@
 # Simple Order System
 
-A small microservices learning project: two independent ASP.NET Core Web API
-services (Product Service, Order Service), each with its own SQL Server
-database, plus an Angular front end. Built from `Assignment.md`.
+A microservices learning project built in two stages:
+
+1. **Core assignment** (`docs/Assignment.md`) — two independent ASP.NET Core
+   Web API services (Product Service, Order Service), each with its own SQL
+   Server database, plus an Angular front end, containerized with Docker
+   Compose.
+2. **Advanced assignment** (`docs/team_assignment_advanced_dotnet10_order_processing.md`)
+   — turns order placement into an **event-driven workflow**: MassTransit +
+   RabbitMQ, a separate Order Worker service, a simulated Pricing Service,
+   and reliability patterns (retries, idempotency, transactional outbox).
+
+New to .NET? Read [`HANDBOOK.md`](./HANDBOOK.md) first — it explains every
+concept here (DI, async/await, EF Core, MassTransit, Docker...) with
+direct comparisons to Spring Boot.
 
 ## Architecture
 
 ```
- Angular App (http://localhost:4200)
-     |                  |
-     v                  v
- Product Service    Order Service  ---- HTTP ---->  Product Service
- (localhost:5001)   (localhost:5002)
-     |                  |
-     v                  v
-  ProductDb          OrderDb          (local MS SQL Server)
+                         Angular App (:4200)
+                          |            |
+                          v            v
+                  Product Service  Order Service (:5002)
+                    (:5001)             |   ^
+                       ^                |   |
+                       |         1. save Order (Submitted)
+                       |         2. publish OrderSubmitted  --\
+                       |            (transactional outbox)     |
+                       |                                       v
+                       |                                 RabbitMQ
+                       |                                       |
+                       |                        3. consume OrderSubmitted
+                       |                                       v
+                       |<----- 4. GET/reduce stock ----  Order Worker
+                       |                                       |
+                       |                        5. POST /api/pricing/quote
+                       |                                       v
+                       |                              Pricing Service (:5003)
+                       |                                       |
+                       |                        6. publish OrderApproved
+                       |                           or OrderRejected
+                       |                                       v
+                       |                                 RabbitMQ
+                       |                                       |
+                       |                        7. consume -> update Order
+                       \--------------------------------------/
+                            (Order Service owns OrderDb; Worker never
+                             writes to it directly)
+
+  ProductDb  <---  Product Service        OrderDb  <---  Order Service
+         (SQL Server, two logical databases, one instance)
 ```
 
-- Product Service owns `ProductDb`. Order Service owns `OrderDb`. Neither
-  service has a connection string to the other's database.
-- Order Service only knows about Product Service through
-  `ProductService:BaseUrl` in its `appsettings.json` — it calls it over HTTP
-  via a typed `HttpClient` (`IProductServiceClient` / `ProductServiceClient`).
-- Each service can be started independently with `dotnet run`.
+**Why the order flow is asynchronous:** `POST /api/orders` saves the order
+as `Submitted` and returns immediately — it does NOT wait for stock
+validation or pricing. A background worker does that work and the order
+moves to `Approved` or `Rejected` a moment later. The client polls
+`GET /api/orders/{id}` (or in a real product, gets pushed a notification)
+to see the final result. This keeps the API fast and decoupled from how
+slow or flaky the Pricing Service might be.
+
+**Service boundaries** (each owns exactly one thing):
+
+| Service | Owns | Talks to |
+|---|---|---|
+| Product Service | `ProductDb` | nothing else (pure data owner) |
+| Order Service | `OrderDb`, publishing `OrderSubmitted`, consuming `OrderApproved`/`OrderRejected` | RabbitMQ only |
+| Order Worker | nothing shared — its own local SQLite "inbox" file for dedupe | Product Service (HTTP), Pricing Service (HTTP), RabbitMQ |
+| Pricing Service | nothing (stateless) | nothing — simulated external dependency |
+
+The Worker **never touches OrderDb or ProductDb directly** — it only calls
+Product Service's HTTP API and publishes events. This is deliberate: only
+one service writes to each database, which is what keeps microservices
+independently deployable. See [`HANDBOOK.md`](./HANDBOOK.md#why-doesnt-the-worker-just-update-orderdb-directly)
+for the full reasoning.
 
 ## Prerequisites
 
 - .NET SDK (10.x) — `dotnet --version`
 - Node.js 20+ and npm — `node --version`
-- A local SQL Server instance reachable as `localhost` with Windows
-  authentication (Developer/Express edition is fine) — `sqlcmd -S localhost -E -Q "SELECT 1"`
+- Docker Desktop (for RabbitMQ — and the easiest way to run everything else)
+- A local SQL Server instance if you want to run the APIs with `dotnet run`
+  instead of Docker — `sqlcmd -S localhost -E -Q "SELECT 1"`
 - The `dotnet-ef` global tool: `dotnet tool install --global dotnet-ef`
-  (skip if `dotnet ef --version` already works)
 
-## 1. Set up the databases
+## Quick start: everything in Docker Compose (recommended)
 
-Each service manages its own database via EF Core migrations — no manual
-SQL needed. From a clean checkout, restore packages before running any
-`dotnet ef` command (the EF CLI tool does not restore automatically):
+This is the easiest way to see the whole event-driven flow working — no
+local SQL Server, RabbitMQ, .NET SDK, or Node install needed.
+
+> **On the Stewart corporate network**: `docker-ca-certs/` contains the
+> corporate TLS-inspection root CAs (Netskope + Stewart root CAs — public
+> certificates only, no private keys). Each Dockerfile installs them into
+> the container's trust store before `dotnet restore` / `npm ci`. If
+> you're building this from a different network, these certs are harmless
+> no-ops and can be left as-is.
+
+```bash
+docker compose up --build
+```
+
+This builds and starts seven containers:
+
+| Container | URL | Role |
+|---|---|---|
+| `sqlserver` | localhost:1433 | hosts `ProductDb` and `OrderDb` |
+| `rabbitmq` | localhost:5672 (AMQP), localhost:15672 (management UI, guest/guest) | message broker |
+| `product-service` | http://localhost:5001 | Product Service API |
+| `order-service` | http://localhost:5002 | Order Service API |
+| `pricing-service` | http://localhost:5003 | simulated Pricing API |
+| `order-worker` | *(no HTTP port — background consumer)* | processes orders |
+| `web-app` | http://localhost:4200 | Angular front end |
+
+Both API containers run EF Core migrations automatically on startup — no
+manual `dotnet ef database update` step required in Docker.
+
+```bash
+docker compose up --build      # build images and start everything, logs attached
+docker compose up -d --build   # same, but detached (runs in the background)
+docker compose down            # stop and remove containers (keeps DB/worker volumes)
+docker compose down -v         # also wipes SQL Server data and the worker's inbox
+docker compose logs -f order-worker        # watch an order get processed live
+docker compose up -d --scale order-worker=3   # run 3 worker instances; RabbitMQ
+                                               # spreads OrderSubmitted across them
+```
+
+The default SA password is `Your_password123!` (set in `docker-compose.yml`).
+Override it with a `.env` file: `SA_PASSWORD=<your-password>`.
+
+### Try it
+
+```bash
+# 1. Create a product
+curl -X POST http://localhost:5001/api/products \
+  -H "Content-Type: application/json" \
+  -d '{"name":"Widget","price":50,"stockQuantity":20}'
+
+# 2. Place an order — returns immediately with status "Submitted" (0)
+curl -X POST http://localhost:5002/api/orders \
+  -H "Content-Type: application/json" \
+  -d '{"customerName":"Ali","productId":1,"quantity":2}'
+
+# 3. Check it a couple of seconds later — status is now "Approved" (1),
+#    with a UnitPrice/TotalPrice filled in by the worker + Pricing Service
+curl http://localhost:5002/api/orders/1
+
+# 4. Try ordering more than the remaining stock — it comes back "Rejected" (2)
+curl -X POST http://localhost:5002/api/orders \
+  -H "Content-Type: application/json" \
+  -d '{"customerName":"Bob","productId":1,"quantity":99999}'
+
+# 5. Retry the SAME logical request safely with an idempotency key —
+#    the second call returns the first order instead of creating a duplicate
+curl -X POST http://localhost:5002/api/orders \
+  -H "Content-Type: application/json" -H "Idempotency-Key: demo-1" \
+  -d '{"customerName":"Carl","productId":1,"quantity":1}'
+curl -X POST http://localhost:5002/api/orders \
+  -H "Content-Type: application/json" -H "Idempotency-Key: demo-1" \
+  -d '{"customerName":"Carl","productId":1,"quantity":1}'
+```
+
+Watch it happen live: `docker compose logs -f order-worker` while you run
+step 2, or open http://localhost:15672 (RabbitMQ management UI) to see
+queues and message rates.
+
+## Running locally without Docker (for active development)
+
+RabbitMQ still needs to run somewhere — the easiest option is to start
+just that one container:
+
+```bash
+docker run -d --name rabbitmq -p 5672:5672 -p 15672:15672 rabbitmq:3-management-alpine
+```
+
+Then, with a local SQL Server running:
+
+### 1. Set up the databases
 
 ```bash
 cd product-service/ProductService.Api
@@ -49,159 +187,98 @@ dotnet restore
 dotnet ef database update
 ```
 
-This creates `ProductDb` and `OrderDb` on your local SQL Server instance
-(connection strings are in each project's `appsettings.json`, pointing at
-`Server=localhost` with a trusted/Windows-auth connection).
+If you change a model, add a new migration before updating the database:
+`dotnet ef migrations add <MigrationName>` then `dotnet ef database update`.
 
-If you ever change a model, add a new migration before updating the
-database:
+### 2. Run every service (five terminals)
 
 ```bash
-dotnet ef migrations add <MigrationName>
-dotnet ef database update
+cd product-service/ProductService.Api   && dotnet run   # :5001
+cd pricing-service/PricingService.Api   && dotnet run   # :5003
+cd order-service/OrderService.Api       && dotnet run   # :5002
+cd order-service/OrderService.Worker    && dotnet run   # consumer, no HTTP port
+cd web-app && npm install && npm start                  # :4200
 ```
 
-## 2. Run the backend services
+Start Product Service and Pricing Service before the Worker, and RabbitMQ
+before Order Service and the Worker — both connect to RabbitMQ on startup.
 
-Open two terminals.
-
-**Terminal 1 — Product Service (http://localhost:5001):**
+## Run the tests
 
 ```bash
-cd product-service/ProductService.Api
-dotnet run
+cd product-service && dotnet test
+cd order-service && dotnet test OrderService.Tests
+cd order-service && dotnet test OrderService.Worker.Tests
 ```
 
-**Terminal 2 — Order Service (http://localhost:5002):**
+Covers, among others:
+- Order creation saves `Submitted` and publishes `OrderSubmitted`
+  (`OrderProcessingServiceTests`)
+- An `Idempotency-Key` retry returns the original order instead of a
+  duplicate (`OrderProcessingServiceTests`)
+- `OrderApproved`/`OrderRejected` events update the order's status, and a
+  **duplicate** `OrderApproved` is ignored rather than overwriting a
+  settled price (`OrderStatusConsumersTests`)
+- The worker approves/rejects based on stock and pricing, skips a stock
+  check entirely for a product that doesn't exist (`OrderSubmittedConsumerTests`)
+- A **redelivered** `OrderSubmitted` message is detected and skipped
+  before it reduces stock a second time (`OrderSubmittedConsumerTests`)
+- A transient Product Service failure faults the message (so MassTransit
+  retries) instead of being treated as a permanent rejection
+  (`OrderSubmittedConsumerTests`)
 
-```bash
-cd order-service/OrderService.Api
-dotnet run
-```
+## API testing with Postman
 
-Order Service calls Product Service at the URL configured under
-`ProductService:BaseUrl` in `order-service/OrderService.Api/appsettings.json`
-(defaults to `http://localhost:5001`). Start Product Service first, or
-Order Service will return `503 Service Unavailable` on order placement
-until Product Service is reachable.
+Import `postman/order-system.postman_collection.json`. Collection
+variables `productBaseUrl` / `orderBaseUrl` / `pricingBaseUrl` default to
+`:5001` / `:5002` / `:5003`.
 
-## 3. Run the Angular app
+## Reliability patterns used here
 
-```bash
-cd web-app
-npm install   # first time only
-npm start     # same as: ng serve
-```
+| Requirement | Where | How |
+|---|---|---|
+| Retries on failure | `order-service/OrderService.Api/Program.cs`, `OrderService.Worker/Program.cs` | `UseMessageRetry` — exponential backoff, 5 attempts, before a message is dead-lettered |
+| Duplicate message ≠ duplicate work | `OrderService.Worker/Consumers/OrderSubmittedConsumer.cs` | checks a local "processed messages" table (the **inbox** pattern) before reducing stock |
+| Duplicate client request ≠ duplicate order | `OrderService.Api/Controllers/OrdersController.cs` + `OrderProcessingService.cs` | `Idempotency-Key` header, unique DB index |
+| Order saved ⟺ event published, atomically | `OrderService.Api/Services/OrderProcessingService.cs`, `OrderDbContext.cs` | MassTransit's EF Core **transactional outbox** |
+| Concurrency limits | `OrderService.Worker/Program.cs`, `Clients/ConcurrencyLimitingHandler.cs` | `ConcurrentMessageLimit` on the RabbitMQ receive endpoint; a semaphore-based `DelegatingHandler` on outbound HTTP calls |
+| HTTP timeouts + circuit breaker | `OrderService.Worker/Program.cs` | `AddStandardResilienceHandler()` on the Pricing Service client |
+| Connection pooling | everywhere HTTP is called | `IHttpClientFactory` typed clients — never `new HttpClient()` |
 
-Open http://localhost:4200. The app talks to both backend services directly
-from the browser (CORS is enabled on both APIs for `http://localhost:4200`).
-
-- **Products** page: list, add, edit, delete products; search by name;
-  sort by price (click the Price header); paginated 5 rows at a time.
-- **Orders** page: place an order against a product and see the order list
-  update, with the product's stock reduced on the Products page.
-
-## 4. Run the tests
-
-```bash
-cd product-service
-dotnet test
-
-cd ../order-service
-dotnet test
-```
-
-Covers (among others):
-- Creating a product (`ProductCatalogServiceTests.CreateAsync_...`)
-- Order rejected when stock is insufficient
-  (`OrderProcessingServiceTests.PlaceOrderAsync_ThrowsInsufficientStock_...`)
-- Stock reduced when an order is placed
-  (`OrderProcessingServiceTests.PlaceOrderAsync_ReducesStockAndSavesOrder_...`)
-
-## 5. API testing with Postman
-
-Import `postman/order-system.postman_collection.json` into Postman. It
-covers every endpoint of both services, including the validation/error
-cases (400, 404, 409, 503). Collection variables `productBaseUrl` and
-`orderBaseUrl` default to `http://localhost:5001` / `http://localhost:5002`.
-
-## 6. Run everything with Docker Compose
-
-No local SQL Server, .NET SDK, or Node install needed for this path — only
-Docker Desktop (with the Docker CLI and Docker Compose, which it bundles).
-
-> **On the Stewart corporate network**: `docker-ca-certs/` contains the
-> corporate TLS-inspection root CAs (Netskope + Stewart root CAs — public
-> certificates only, no private keys). Each Dockerfile installs them into
-> the container's trust store before `dotnet restore` / `npm ci`, otherwise
-> those commands fail with `UntrustedRoot` / "TLS: server certificate not
-> trusted" because the container doesn't know about the corporate proxy
-> that intercepts outbound HTTPS. If you're building this from a different
-> network, these certs are harmless no-ops and can be left as-is.
-
-From the repo root:
-
-```bash
-docker compose up --build
-```
-
-This builds and starts four containers:
-
-- `sqlserver` — SQL Server 2022 (Linux container), with a named volume
-  (`mssql-data`) so data survives a restart. Both `ProductDb` and `OrderDb`
-  live on this one instance, matching the spec's "two databases on one
-  local SQL Server" (section 4) — the services still never cross into
-  each other's database.
-- `product-service` — built from `product-service/ProductService.Api/Dockerfile`,
-  published and run on `:8080` inside the container, mapped to
-  **http://localhost:5001**.
-- `order-service` — built from `order-service/OrderService.Api/Dockerfile`,
-  mapped to **http://localhost:5002**. Reaches Product Service over the
-  Docker network at `http://product-service:8080` (set via the
-  `ProductService__BaseUrl` environment variable in `docker-compose.yml`
-  — no code change, same config-driven pattern as `appsettings.json`).
-- `web-app` — Angular app built and served by nginx, mapped to
-  **http://localhost:4200**.
-
-Both API containers run EF Core migrations automatically on startup
-(`Database.Migrate()`, with a short retry loop in case SQL Server reports
-"healthy" a few seconds before it actually accepts connections) — no
-manual `dotnet ef database update` step required in Docker.
-
-Useful commands:
-
-```bash
-docker compose up --build      # build images and start everything, logs attached
-docker compose up -d --build   # same, but detached (runs in the background)
-docker compose down            # stop and remove containers (keeps the DB volume)
-docker compose down -v         # also wipes the SQL Server data volume
-docker compose logs -f order-service   # tail one service's logs
-```
-
-The default SA password is `Your_password123!` (set in `docker-compose.yml`).
-Override it by creating a `.env` file next to `docker-compose.yml` with
-`SA_PASSWORD=<your-password>` — Compose picks it up automatically.
+`HANDBOOK.md` explains **why** each of these exists and what breaks without it.
 
 ## Project layout
 
 ```
 /order-system
-  docker-compose.yml         # Runs all 4 containers (SQL Server + both APIs + Angular)
+  docker-compose.yml
+  HANDBOOK.md                       # start here if you're new to .NET
   /product-service
-    ProductService.Api      # Controllers, Services, Data (DbContext), Models, Dtos, Dockerfile
-    ProductService.Tests    # xUnit tests
+    ProductService.Api              # Controllers, Services, Data, Models, Dtos, Dockerfile
+    ProductService.Tests
   /order-service
-    OrderService.Api        # Controllers, Services, Data, Models, Dtos, Clients (Product HTTP client), Dockerfile
-    OrderService.Tests      # xUnit tests
-  /web-app                  # Angular app (standalone components), Dockerfile + nginx.conf
-  /postman                  # Exported Postman collection
+    OrderSystem.Contracts           # shared event contracts (OrderSubmitted/Approved/Rejected)
+    OrderService.Api                # Controllers, Services, Data, Consumers (status updates), Dockerfile
+    OrderService.Worker             # consumes OrderSubmitted, calls Product+Pricing, Dockerfile
+    OrderService.Tests              # Order API + its consumers
+    OrderService.Worker.Tests       # Worker's consumer
+  /pricing-service
+    PricingService.Api              # simulated external dependency, Dockerfile
+  /web-app                          # Angular app (standalone components), Dockerfile + nginx.conf
+  /postman                          # Exported Postman collection
   README.md
 ```
 
 ## Demo script (~5 minutes)
 
 1. Open the Products page, add a new product.
-2. Open the Orders page, place an order against that product.
-3. Go back to Products — stock has been reduced by the order quantity.
-4. Place an order with a quantity larger than the remaining stock — see
-   the readable error and confirm no order was created.
+2. Open the Orders page, place an order against that product. It shows as
+   "Submitted".
+3. Refresh a moment later — it's moved to "Approved", with a price filled
+   in by the Pricing Service.
+4. Place an order with a quantity larger than the remaining stock — it
+   moves to "Rejected" instead, with a reason.
+5. `docker compose logs -f order-worker` while placing an order, to watch
+   the stock check and pricing call happen in real time.
+6. Open http://localhost:15672 (guest/guest) to see the `order-submitted-queue`
+   queue and its message rate in RabbitMQ's own UI.

@@ -1,4 +1,5 @@
 using System.ComponentModel.DataAnnotations;
+using OrderService.Api.Models;
 
 namespace OrderService.Api.Dtos;
 
@@ -7,9 +8,12 @@ public record OrderResponse(
     string CustomerName,
     int ProductId,
     int Quantity,
-    decimal UnitPrice,
-    decimal TotalPrice,
-    DateTime CreatedAtUtc);
+    decimal? UnitPrice,
+    decimal? TotalPrice,
+    OrderStatus Status,
+    string? RejectionReason,
+    DateTime CreatedAtUtc,
+    DateTime? UpdatedAtUtc);
 
 public class OrderCreateRequest
 {

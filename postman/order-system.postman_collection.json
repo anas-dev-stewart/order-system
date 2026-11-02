@@ -7,6 +7,7 @@
   "variable": [
     { "key": "productBaseUrl", "value": "http://localhost:5001" },
     { "key": "orderBaseUrl", "value": "http://localhost:5002" },
+    { "key": "pricingBaseUrl", "value": "http://localhost:5003" },
     { "key": "productId", "value": "1" },
     { "key": "orderId", "value": "1" }
   ],
@@ -101,7 +102,7 @@
       "name": "Order Service",
       "item": [
         {
-          "name": "Place order",
+          "name": "Place order (async — returns Status: Submitted)",
           "request": {
             "method": "POST",
             "header": [{ "key": "Content-Type", "value": "application/json" }],
@@ -109,19 +110,37 @@
               "mode": "raw",
               "raw": "{\n  \"customerName\": \"Ali\",\n  \"productId\": {{productId}},\n  \"quantity\": 2\n}"
             },
-            "url": "{{orderBaseUrl}}/api/orders"
+            "url": "{{orderBaseUrl}}/api/orders",
+            "description": "Returns 201 immediately with status 0 (Submitted). Re-run 'Get order by id' a couple of seconds later — the Order Worker processes it asynchronously and flips it to 1 (Approved) or 2 (Rejected)."
           }
         },
         {
-          "name": "Place order - product not found (404)",
+          "name": "Place order - with Idempotency-Key (retry-safe)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Idempotency-Key", "value": "demo-key-1" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"customerName\": \"Ali\",\n  \"productId\": {{productId}},\n  \"quantity\": 2\n}"
+            },
+            "url": "{{orderBaseUrl}}/api/orders",
+            "description": "Send this request twice in a row with the same Idempotency-Key header. The second call returns the SAME order id instead of creating a duplicate."
+          }
+        },
+        {
+          "name": "Place order - will be rejected for insufficient stock",
           "request": {
             "method": "POST",
             "header": [{ "key": "Content-Type", "value": "application/json" }],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"customerName\": \"Ali\",\n  \"productId\": 999999,\n  \"quantity\": 1\n}"
+              "raw": "{\n  \"customerName\": \"Ali\",\n  \"productId\": {{productId}},\n  \"quantity\": 999999\n}"
             },
-            "url": "{{orderBaseUrl}}/api/orders"
+            "url": "{{orderBaseUrl}}/api/orders",
+            "description": "Still returns 201/Submitted immediately — check the order a few seconds later and it will show status 2 (Rejected) with a rejectionReason, because the worker's stock check failed."
           }
         },
         {
@@ -144,10 +163,28 @@
           }
         },
         {
-          "name": "Get order by id",
+          "name": "Get order by id (poll this after placing an order)",
           "request": {
             "method": "GET",
             "url": "{{orderBaseUrl}}/api/orders/{{orderId}}"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Pricing Service (simulated)",
+      "item": [
+        {
+          "name": "Get a quote",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"productId\": 1,\n  \"basePrice\": 50,\n  \"quantity\": 2\n}"
+            },
+            "url": "{{pricingBaseUrl}}/api/pricing/quote",
+            "description": "Called by the Order Worker, not the browser. ~1 in 6 calls returns 503 on purpose, to exercise the worker's retry/circuit-breaker handling."
           }
         }
       ]

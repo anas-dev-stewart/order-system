@@ -1,8 +1,7 @@
 using System.Net;
 using System.Net.Http.Json;
-using OrderService.Api.Services;
 
-namespace OrderService.Api.Clients;
+namespace OrderService.Worker.Clients;
 
 public class ProductServiceClient : IProductServiceClient
 {

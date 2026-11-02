@@ -18,3 +18,8 @@ Thumbs.db
 
 ## Runtime logs from local testing
 *.log
+
+## Order Worker's local SQLite inbox (dev/local-run artifact, not checked in)
+*.db
+*.db-shm
+*.db-wal

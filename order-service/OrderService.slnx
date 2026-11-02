@@ -1,4 +1,7 @@
 <Solution>
   <Project Path="OrderService.Api/OrderService.Api.csproj" />
   <Project Path="OrderService.Tests/OrderService.Tests.csproj" />
+  <Project Path="OrderService.Worker/OrderService.Worker.csproj" />
+  <Project Path="OrderService.Worker.Tests/OrderService.Worker.Tests.csproj" />
+  <Project Path="OrderSystem.Contracts/OrderSystem.Contracts.csproj" />
 </Solution>

@@ -7,11 +7,17 @@ WORKDIR /src
 COPY docker-ca-certs/*.crt /usr/local/share/ca-certificates/
 RUN update-ca-certificates
 
-COPY order-service/OrderService.Api/OrderService.Api.csproj ./
-RUN dotnet restore
+# Project files first (preserving the same relative layout as the repo, so
+# OrderService.Api's "..\OrderSystem.Contracts\..." ProjectReference still
+# resolves) so `dotnet restore` is cached and only reruns when a .csproj
+# actually changes, not on every source edit.
+COPY order-service/OrderSystem.Contracts/OrderSystem.Contracts.csproj order-service/OrderSystem.Contracts/
+COPY order-service/OrderService.Api/OrderService.Api.csproj order-service/OrderService.Api/
+RUN dotnet restore order-service/OrderService.Api/OrderService.Api.csproj
 
-COPY order-service/OrderService.Api/ .
-RUN dotnet publish OrderService.Api.csproj -c Release -o /app/publish --no-restore
+COPY order-service/OrderSystem.Contracts/ order-service/OrderSystem.Contracts/
+COPY order-service/OrderService.Api/ order-service/OrderService.Api/
+RUN dotnet publish order-service/OrderService.Api/OrderService.Api.csproj -c Release -o /app/publish --no-restore
 
 # Runtime stage
 FROM mcr.microsoft.com/dotnet/aspnet:10.0 AS final

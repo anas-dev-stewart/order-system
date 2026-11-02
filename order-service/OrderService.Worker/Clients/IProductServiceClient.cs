@@ -1,4 +1,4 @@
-namespace OrderService.Api.Clients;
+namespace OrderService.Worker.Clients;
 
 public interface IProductServiceClient
 {
@@ -7,8 +7,8 @@ public interface IProductServiceClient
 
     /// <summary>
     /// Reduces stock on the Product Service.
-    /// Throws Services.ProductNotFoundException (404), Services.InsufficientStockException (409),
-    /// or Services.ProductServiceUnavailableException (connection failure) as appropriate.
+    /// Throws ProductNotFoundException (404), InsufficientStockException (409),
+    /// or ProductServiceUnavailableException (connection failure/5xx) as appropriate.
     /// </summary>
     Task<ProductClientDto> ReduceStockAsync(int id, int quantity, CancellationToken cancellationToken = default);
 }

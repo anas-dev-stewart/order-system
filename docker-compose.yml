@@ -16,6 +16,19 @@ services:
       retries: 10
       start_period: 20s
 
+  rabbitmq:
+    image: rabbitmq:3-management-alpine
+    container_name: order-system-rabbitmq
+    ports:
+      - "5672:5672" # AMQP (used by MassTransit)
+      - "15672:15672" # Management UI — http://localhost:15672 (guest/guest)
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+
   product-service:
     build:
       context: .
@@ -38,14 +51,53 @@ services:
     depends_on:
       sqlserver:
         condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
       product-service:
         condition: service_started
     environment:
       ASPNETCORE_ENVIRONMENT: Docker
       ConnectionStrings__OrderDb: Server=sqlserver,1433;Database=OrderDb;User Id=sa;Password=${SA_PASSWORD:-Your_password123!};TrustServerCertificate=True
-      ProductService__BaseUrl: http://product-service:8080
+      RabbitMq__Host: rabbitmq
+      RabbitMq__Username: guest
+      RabbitMq__Password: guest
     ports:
       - "5002:8080"
+
+  pricing-service:
+    build:
+      context: .
+      dockerfile: pricing-service/PricingService.Api/Dockerfile
+    container_name: order-system-pricing-service
+    environment:
+      ASPNETCORE_ENVIRONMENT: Docker
+    ports:
+      - "5003:8080"
+
+  order-worker:
+    build:
+      context: .
+      dockerfile: order-service/OrderService.Worker/Dockerfile
+    container_name: order-system-order-worker
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      product-service:
+        condition: service_started
+      pricing-service:
+        condition: service_started
+    environment:
+      DOTNET_ENVIRONMENT: Docker
+      RabbitMq__Host: rabbitmq
+      RabbitMq__Username: guest
+      RabbitMq__Password: guest
+      ProductService__BaseUrl: http://product-service:8080
+      PricingService__BaseUrl: http://pricing-service:8080
+    volumes:
+      - worker-data:/data
+    # No published ports — this is a background consumer, nothing calls it
+    # over HTTP. Scale it with `docker compose up --scale order-worker=3`
+    # to see MassTransit spread OrderSubmitted messages across instances.
 
   web-app:
     build:
@@ -60,3 +112,4 @@ services:
 
 volumes:
   mssql-data:
+  worker-data:
