@@ -1,11 +1,14 @@
-import { Component, OnInit } from '@angular/core';
+import { Component, OnDestroy, OnInit } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { HttpErrorResponse } from '@angular/common/http';
+import { Subscription, interval } from 'rxjs';
 import { OrderService } from '../../services/order.service';
 import { ProductService } from '../../services/product.service';
 import { Order, OrderStatus } from '../../models/order.model';
 import { Product } from '../../models/product.model';
+
+const POLL_INTERVAL_MS = 3000;
 
 @Component({
   selector: 'app-orders-page',
@@ -14,7 +17,7 @@ import { Product } from '../../models/product.model';
   templateUrl: './orders-page.component.html',
   styleUrl: './orders-page.component.css'
 })
-export class OrdersPageComponent implements OnInit {
+export class OrdersPageComponent implements OnInit, OnDestroy {
   orders: Order[] = [];
   products: Product[] = [];
   loading = false;
@@ -25,11 +28,21 @@ export class OrdersPageComponent implements OnInit {
   quantity: number | null = null;
   placingOrder = false;
 
+  private pollSubscription: Subscription | null = null;
+
   constructor(private orderService: OrderService, private productService: ProductService) {}
 
   ngOnInit(): void {
     this.loadOrders();
     this.loadProducts();
+    // Orders move from Submitted to Approved/Rejected asynchronously once
+    // the worker finishes, so the table polls in the background rather
+    // than requiring a manual refresh to see the status change.
+    this.pollSubscription = interval(POLL_INTERVAL_MS).subscribe(() => this.refreshOrdersSilently());
+  }
+
+  ngOnDestroy(): void {
+    this.pollSubscription?.unsubscribe();
   }
 
   loadOrders(): void {
@@ -42,6 +55,17 @@ export class OrdersPageComponent implements OnInit {
       error: (err) => {
         this.errorMessage = this.extractError(err);
         this.loading = false;
+      }
+    });
+  }
+
+  private refreshOrdersSilently(): void {
+    // Same as loadOrders, but doesn't toggle `loading` so the background
+    // poll doesn't flash the "Loading orders..." state on every tick.
+    this.orderService.getAll().subscribe({
+      next: (orders) => (this.orders = [...orders].sort((a, b) => b.id - a.id)),
+      error: () => {
+        /* transient poll failures are silent; the next tick will retry */
       }
     });
   }
