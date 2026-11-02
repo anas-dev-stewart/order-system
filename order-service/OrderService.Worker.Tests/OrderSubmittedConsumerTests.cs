@@ -49,7 +49,7 @@ public class OrderSubmittedConsumerTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task OrderSubmitted_WithStockAndPricingAvailable_PublishesOrderApproved()
+    public async Task OrderSubmitted_WithStockAndPricingAvailable_SendsOrderApproved()
     {
         _productClient
             .Setup(c => c.ReduceStockAsync(1, 2, It.IsAny<CancellationToken>()))
@@ -61,13 +61,13 @@ public class OrderSubmittedConsumerTests : IAsyncLifetime
         await _harness.Bus.Publish(new OrderSubmitted(42, 1, 2, "Ali", DateTime.UtcNow));
 
         Assert.True(await _harness.Consumed.Any<OrderSubmitted>());
-        var approved = await _harness.Published.Any<OrderApproved>(m => m.Context.Message.OrderId == 42);
+        var approved = await _harness.Sent.Any<OrderApproved>(m => m.Context.Message.OrderId == 42);
         Assert.True(approved);
-        Assert.False(await _harness.Published.Any<OrderRejected>());
+        Assert.False(await _harness.Sent.Any<OrderRejected>());
     }
 
     [Fact]
-    public async Task OrderSubmitted_WhenProductDoesNotExist_PublishesOrderRejected_WithoutCallingPricing()
+    public async Task OrderSubmitted_WhenProductDoesNotExist_SendsOrderRejected_WithoutCallingPricing()
     {
         _productClient
             .Setup(c => c.ReduceStockAsync(99, 1, It.IsAny<CancellationToken>()))
@@ -75,13 +75,13 @@ public class OrderSubmittedConsumerTests : IAsyncLifetime
 
         await _harness.Bus.Publish(new OrderSubmitted(7, 99, 1, "Sara", DateTime.UtcNow));
 
-        var rejected = await _harness.Published.Any<OrderRejected>(m => m.Context.Message.OrderId == 7);
+        var rejected = await _harness.Sent.Any<OrderRejected>(m => m.Context.Message.OrderId == 7);
         Assert.True(rejected);
         _pricingClient.Verify(c => c.GetQuoteAsync(It.IsAny<PricingQuoteRequest>(), It.IsAny<CancellationToken>()), Times.Never);
     }
 
     [Fact]
-    public async Task OrderSubmitted_WhenStockInsufficient_PublishesOrderRejected()
+    public async Task OrderSubmitted_WhenStockInsufficient_SendsOrderRejected()
     {
         _productClient
             .Setup(c => c.ReduceStockAsync(1, 50, It.IsAny<CancellationToken>()))
@@ -89,12 +89,12 @@ public class OrderSubmittedConsumerTests : IAsyncLifetime
 
         await _harness.Bus.Publish(new OrderSubmitted(8, 1, 50, "Sara", DateTime.UtcNow));
 
-        var rejected = await _harness.Published.Any<OrderRejected>(m => m.Context.Message.OrderId == 8);
+        var rejected = await _harness.Sent.Any<OrderRejected>(m => m.Context.Message.OrderId == 8);
         Assert.True(rejected);
     }
 
     [Fact]
-    public async Task OrderSubmitted_WhenProductServiceUnavailable_FaultsTheMessage_AndPublishesNothing()
+    public async Task OrderSubmitted_WhenProductServiceUnavailable_FaultsTheMessage_AndSendsNothing()
     {
         // Transient infrastructure failure: should NOT be treated as a
         // business rejection. The consumer lets the exception propagate so
@@ -108,8 +108,8 @@ public class OrderSubmittedConsumerTests : IAsyncLifetime
         await _harness.Bus.Publish(new OrderSubmitted(9, 1, 1, "Sara", DateTime.UtcNow));
 
         Assert.True(await _harness.Published.Any<Fault<OrderSubmitted>>());
-        Assert.False(await _harness.Published.Any<OrderApproved>());
-        Assert.False(await _harness.Published.Any<OrderRejected>());
+        Assert.False(await _harness.Sent.Any<OrderApproved>());
+        Assert.False(await _harness.Sent.Any<OrderRejected>());
 
         await using var db = NewDbContext();
         Assert.Empty(db.ProcessedMessages);
@@ -130,7 +130,7 @@ public class OrderSubmittedConsumerTests : IAsyncLifetime
 
         Assert.True(await _harness.Consumed.Any<OrderSubmitted>());
         _productClient.Verify(c => c.ReduceStockAsync(It.IsAny<int>(), It.IsAny<int>(), It.IsAny<CancellationToken>()), Times.Never);
-        Assert.False(await _harness.Published.Any<OrderApproved>());
-        Assert.False(await _harness.Published.Any<OrderRejected>());
+        Assert.False(await _harness.Sent.Any<OrderApproved>());
+        Assert.False(await _harness.Sent.Any<OrderRejected>());
     }
 }

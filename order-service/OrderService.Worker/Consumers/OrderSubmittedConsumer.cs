@@ -13,6 +13,9 @@ namespace OrderService.Worker.Consumers;
 /// </summary>
 public class OrderSubmittedConsumer : IConsumer<OrderSubmitted>
 {
+    private static readonly Uri OrderApprovedQueue = new("queue:order-approved-queue");
+    private static readonly Uri OrderRejectedQueue = new("queue:order-rejected-queue");
+
     private readonly WorkerDbContext _db;
     private readonly IProductServiceClient _productClient;
     private readonly IPricingServiceClient _pricingClient;
@@ -32,10 +35,10 @@ public class OrderSubmittedConsumer : IConsumer<OrderSubmitted>
 
     public async Task Consume(ConsumeContext<OrderSubmitted> context)
     {
-        // RabbitMQ (via MassTransit) guarantees "at least once" delivery:
-        // if this consumer crashes, times out, or the connection drops
-        // after doing its work but before acking the message, the broker
-        // redelivers it. Without this check, a redelivered message would
+        // Azure Service Bus (via MassTransit) guarantees "at least once"
+        // delivery: if this consumer crashes, times out, or the connection
+        // drops after doing its work but before completing the message,
+        // the broker redelivers it. Without this check, a redelivered message would
         // call ReduceStockAsync a second time and double-debit stock for
         // the same order. MessageId is unique per publish (not per
         // redelivery attempt), so it's a safe dedupe key.
@@ -97,14 +100,19 @@ public class OrderSubmittedConsumer : IConsumer<OrderSubmitted>
 
     private async Task ApproveAsync(ConsumeContext<OrderSubmitted> context, int orderId, decimal unitPrice, decimal totalPrice)
     {
-        await context.Publish(new OrderApproved(orderId, unitPrice, totalPrice, DateTime.UtcNow));
+        // Send (point-to-point), not Publish — see the Basic-tier/queue
+        // reasoning in Program.cs. ConsumeContext implements
+        // ISendEndpointProvider, so no extra DI is needed here.
+        var sendEndpoint = await context.GetSendEndpoint(OrderApprovedQueue);
+        await sendEndpoint.Send(new OrderApproved(orderId, unitPrice, totalPrice, DateTime.UtcNow));
         await MarkProcessedAsync(context.MessageId!.Value);
         _logger.LogInformation("Order {OrderId} approved at {UnitPrice}/unit.", orderId, unitPrice);
     }
 
     private async Task RejectAsync(ConsumeContext<OrderSubmitted> context, int orderId, string reason)
     {
-        await context.Publish(new OrderRejected(orderId, reason, DateTime.UtcNow));
+        var sendEndpoint = await context.GetSendEndpoint(OrderRejectedQueue);
+        await sendEndpoint.Send(new OrderRejected(orderId, reason, DateTime.UtcNow));
         await MarkProcessedAsync(context.MessageId!.Value);
         _logger.LogInformation("Order {OrderId} rejected: {Reason}", orderId, reason);
     }

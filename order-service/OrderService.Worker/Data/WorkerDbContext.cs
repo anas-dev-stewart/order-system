@@ -7,7 +7,7 @@ namespace OrderService.Worker.Data;
 /// The worker's own lightweight database (SQLite, one file). It does NOT
 /// store orders — Order Service still owns that. It only tracks which
 /// MassTransit MessageIds have already been fully processed, so a
-/// redelivered OrderSubmitted (RabbitMQ is "at least once", not
+/// redelivered OrderSubmitted (Azure Service Bus is "at least once", not
 /// "exactly once") can be detected and skipped before it does anything
 /// like reducing stock a second time. This is the "inbox" half of the
 /// outbox/inbox pattern — Order Service has the outbox, the Worker has

@@ -42,11 +42,21 @@ public class OrderProcessingServiceTests : IAsyncLifetime
         await _connection.DisposeAsync();
     }
 
-    [Fact]
-    public async Task PlaceOrderAsync_SavesOrderAsSubmitted_AndPublishesOrderSubmitted()
+    private static Mock<ISendEndpointProvider> CreateSendEndpointProviderMock(out Mock<ISendEndpoint> sendEndpointMock)
     {
-        var publishMock = new Mock<IPublishEndpoint>();
-        var service = new OrderProcessingService(_db, publishMock.Object, NullLogger<OrderProcessingService>.Instance);
+        sendEndpointMock = new Mock<ISendEndpoint>();
+        var providerMock = new Mock<ISendEndpointProvider>();
+        providerMock
+            .Setup(p => p.GetSendEndpoint(It.IsAny<Uri>()))
+            .ReturnsAsync(sendEndpointMock.Object);
+        return providerMock;
+    }
+
+    [Fact]
+    public async Task PlaceOrderAsync_SavesOrderAsSubmitted_AndSendsOrderSubmitted()
+    {
+        var providerMock = CreateSendEndpointProviderMock(out var sendEndpointMock);
+        var service = new OrderProcessingService(_db, providerMock.Object, NullLogger<OrderProcessingService>.Instance);
 
         var result = await service.PlaceOrderAsync(
             new OrderCreateRequest { CustomerName = "Ali", ProductId = 1, Quantity = 2 },
@@ -56,16 +66,16 @@ public class OrderProcessingServiceTests : IAsyncLifetime
         Assert.Null(result.UnitPrice);
         Assert.Single(_db.Orders);
 
-        publishMock.Verify(p => p.Publish(
-            It.Is<OrderSubmitted>(e => e.OrderId == result.Id && e.ProductId == 1 && e.Quantity == 2),
+        sendEndpointMock.Verify(e => e.Send(
+            It.Is<OrderSubmitted>(m => m.OrderId == result.Id && m.ProductId == 1 && m.Quantity == 2),
             It.IsAny<CancellationToken>()), Times.Once);
     }
 
     [Fact]
-    public async Task PlaceOrderAsync_WithRepeatedIdempotencyKey_ReturnsExistingOrder_AndDoesNotPublishAgain()
+    public async Task PlaceOrderAsync_WithRepeatedIdempotencyKey_ReturnsExistingOrder_AndDoesNotSendAgain()
     {
-        var publishMock = new Mock<IPublishEndpoint>();
-        var service = new OrderProcessingService(_db, publishMock.Object, NullLogger<OrderProcessingService>.Instance);
+        var providerMock = CreateSendEndpointProviderMock(out var sendEndpointMock);
+        var service = new OrderProcessingService(_db, providerMock.Object, NullLogger<OrderProcessingService>.Instance);
         var request = new OrderCreateRequest { CustomerName = "Sara", ProductId = 1, Quantity = 1 };
 
         var first = await service.PlaceOrderAsync(request, idempotencyKey: "client-retry-key-1");
@@ -73,6 +83,6 @@ public class OrderProcessingServiceTests : IAsyncLifetime
 
         Assert.Equal(first.Id, second.Id);
         Assert.Single(_db.Orders);
-        publishMock.Verify(p => p.Publish(It.IsAny<OrderSubmitted>(), It.IsAny<CancellationToken>()), Times.Once);
+        sendEndpointMock.Verify(e => e.Send(It.IsAny<OrderSubmitted>(), It.IsAny<CancellationToken>()), Times.Once);
     }
 }

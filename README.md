@@ -8,8 +8,9 @@ A microservices learning project built in two stages:
    Compose.
 2. **Advanced assignment** (`docs/team_assignment_advanced_dotnet10_order_processing.md`)
    — turns order placement into an **event-driven workflow**: MassTransit +
-   RabbitMQ, a separate Order Worker service, a simulated Pricing Service,
-   and reliability patterns (retries, idempotency, transactional outbox).
+   **Azure Service Bus**, a separate Order Worker service, a simulated
+   Pricing Service, and reliability patterns (retries, idempotency,
+   transactional outbox).
 
 New to .NET? Read [`HANDBOOK.md`](./HANDBOOK.md) first — it explains every
 concept here (DI, async/await, EF Core, MassTransit, Docker...) with
@@ -25,26 +26,28 @@ direct comparisons to Spring Boot.
                     (:5001)             |   ^
                        ^                |   |
                        |         1. save Order (Submitted)
-                       |         2. publish OrderSubmitted  --\
-                       |            (transactional outbox)     |
-                       |                                       v
-                       |                                 RabbitMQ
-                       |                                       |
+                       |         2. SEND OrderSubmitted      --\
+                       |            (transactional outbox)      |
+                       |                                        v
+                       |                            Azure Service Bus
+                       |                           (order-submitted-queue)
+                       |                                        |
                        |                        3. consume OrderSubmitted
-                       |                                       v
+                       |                                        v
                        |<----- 4. GET/reduce stock ----  Order Worker
-                       |                                       |
+                       |                                        |
                        |                        5. POST /api/pricing/quote
-                       |                                       v
+                       |                                        v
                        |                              Pricing Service (:5003)
-                       |                                       |
-                       |                        6. publish OrderApproved
+                       |                                        |
+                       |                        6. SEND OrderApproved
                        |                           or OrderRejected
-                       |                                       v
-                       |                                 RabbitMQ
-                       |                                       |
+                       |                                        v
+                       |                            Azure Service Bus
+                       |                     (order-approved/-rejected-queue)
+                       |                                        |
                        |                        7. consume -> update Order
-                       \--------------------------------------/
+                       \---------------------------------------/
                             (Order Service owns OrderDb; Worker never
                              writes to it directly)
 
@@ -65,9 +68,19 @@ slow or flaky the Pricing Service might be.
 | Service | Owns | Talks to |
 |---|---|---|
 | Product Service | `ProductDb` | nothing else (pure data owner) |
-| Order Service | `OrderDb`, publishing `OrderSubmitted`, consuming `OrderApproved`/`OrderRejected` | RabbitMQ only |
-| Order Worker | nothing shared — its own local SQLite "inbox" file for dedupe | Product Service (HTTP), Pricing Service (HTTP), RabbitMQ |
+| Order Service | `OrderDb`, sending `OrderSubmitted`, consuming `OrderApproved`/`OrderRejected` | Azure Service Bus only |
+| Order Worker | nothing shared — its own local SQLite "inbox" file for dedupe | Product Service (HTTP), Pricing Service (HTTP), Azure Service Bus |
 | Pricing Service | nothing (stateless) | nothing — simulated external dependency |
+
+**Why Send, not Publish:** this project's Azure Service Bus namespace is
+**Basic tier** (cheapest, no monthly-ish Standard/Premium cost) — Basic
+tier supports queues only, not topics/subscriptions, so MassTransit's
+usual `Publish` fan-out (which needs a topic) isn't available. Every event
+here has exactly one consumer anyway, so each one is `Send` directly to a
+named queue (`order-submitted-queue`, `order-approved-queue`,
+`order-rejected-queue`) — plain point-to-point messaging. See
+[`HANDBOOK.md`](./HANDBOOK.md#8-masstransit-vs-spring-amqp--spring-cloud-stream)
+for the Send-vs-Publish reasoning in depth.
 
 The Worker **never touches OrderDb or ProductDb directly** — it only calls
 Product Service's HTTP API and publishes events. This is deliberate: only
@@ -79,15 +92,56 @@ for the full reasoning.
 
 - .NET SDK (10.x) — `dotnet --version`
 - Node.js 20+ and npm — `node --version`
-- Docker Desktop (for RabbitMQ — and the easiest way to run everything else)
+- Docker Desktop (the easiest way to run everything)
+- An Azure Service Bus namespace (Basic tier is enough) — see
+  [Setting up Azure Service Bus](#setting-up-azure-service-bus) below if
+  you don't have one yet
 - A local SQL Server instance if you want to run the APIs with `dotnet run`
   instead of Docker — `sqlcmd -S localhost -E -Q "SELECT 1"`
 - The `dotnet-ef` global tool: `dotnet tool install --global dotnet-ef`
 
+## Setting up Azure Service Bus
+
+1. Create a namespace: Azure Portal → Create a resource → **Service Bus**
+   → Basic tier is fine (queues only, no topics — this project only uses
+   Send/Consume, never Publish, so that's not a limitation here; see
+   [HANDBOOK.md §8](./HANDBOOK.md#8-masstransit-vs-spring-amqp--spring-cloud-stream)).
+   Or via CLI:
+   ```bash
+   az servicebus namespace create --resource-group <rg> --name <namespace> --sku Basic --location <region>
+   ```
+2. Create the three queues MassTransit needs (it would also auto-create
+   them on first run, since `RootManageSharedAccessKey` has Manage rights
+   — this just makes it explicit):
+   ```bash
+   az servicebus queue create --resource-group <rg> --namespace-name <namespace> --name order-submitted-queue
+   az servicebus queue create --resource-group <rg> --namespace-name <namespace> --name order-approved-queue
+   az servicebus queue create --resource-group <rg> --namespace-name <namespace> --name order-rejected-queue
+   ```
+3. Grab the connection string: namespace → **Shared access policies** →
+   `RootManageSharedAccessKey` → copy the **Primary Connection String**.
+   Or via CLI:
+   ```bash
+   az servicebus namespace authorization-rule keys list \
+     --resource-group <rg> --namespace-name <namespace> \
+     --name RootManageSharedAccessKey --query primaryConnectionString -o tsv
+   ```
+4. Create a `.env` file next to `docker-compose.yml` (gitignored — never
+   commit this):
+   ```
+   SERVICEBUS_CONNECTION_STRING=Endpoint=sb://<namespace>.servicebus.windows.net/;SharedAccessKeyName=RootManageSharedAccessKey;SharedAccessKey=...
+   ```
+   For running the APIs directly with `dotnet run` instead of Docker, set
+   the same value as the `ServiceBus:ConnectionString` config key (e.g.
+   via `dotnet user-secrets` or the `ServiceBus__ConnectionString`
+   environment variable) in both `OrderService.Api` and `OrderService.Worker`.
+
 ## Quick start: everything in Docker Compose (recommended)
 
 This is the easiest way to see the whole event-driven flow working — no
-local SQL Server, RabbitMQ, .NET SDK, or Node install needed.
+local SQL Server, .NET SDK, or Node install needed. You do still need an
+Azure Service Bus connection string in a `.env` file (see
+[Setting up Azure Service Bus](#setting-up-azure-service-bus) above).
 
 > **On the Stewart corporate network**: `docker-ca-certs/` contains the
 > corporate TLS-inspection root CAs (Netskope + Stewart root CAs — public
@@ -100,12 +154,12 @@ local SQL Server, RabbitMQ, .NET SDK, or Node install needed.
 docker compose up --build
 ```
 
-This builds and starts seven containers:
+This builds and starts six containers (the broker itself is Azure Service
+Bus, not a container):
 
 | Container | URL | Role |
 |---|---|---|
 | `sqlserver` | localhost:1433 | hosts `ProductDb` and `OrderDb` |
-| `rabbitmq` | localhost:5672 (AMQP), localhost:15672 (management UI, guest/guest) | message broker |
 | `product-service` | http://localhost:5001 | Product Service API |
 | `order-service` | http://localhost:5002 | Order Service API |
 | `pricing-service` | http://localhost:5003 | simulated Pricing API |
@@ -121,7 +175,7 @@ docker compose up -d --build   # same, but detached (runs in the background)
 docker compose down            # stop and remove containers (keeps DB/worker volumes)
 docker compose down -v         # also wipes SQL Server data and the worker's inbox
 docker compose logs -f order-worker        # watch an order get processed live
-docker compose up -d --scale order-worker=3   # run 3 worker instances; RabbitMQ
+docker compose up -d --scale order-worker=3   # run 3 worker instances; Service Bus
                                                # spreads OrderSubmitted across them
 ```
 
@@ -161,19 +215,15 @@ curl -X POST http://localhost:5002/api/orders \
 ```
 
 Watch it happen live: `docker compose logs -f order-worker` while you run
-step 2, or open http://localhost:15672 (RabbitMQ management UI) to see
-queues and message rates.
+step 2, or open your Service Bus namespace in the Azure Portal →
+**Queues** to see message counts update on `order-submitted-queue` /
+`order-approved-queue` / `order-rejected-queue` in real time.
 
 ## Running locally without Docker (for active development)
 
-RabbitMQ still needs to run somewhere — the easiest option is to start
-just that one container:
-
-```bash
-docker run -d --name rabbitmq -p 5672:5672 -p 15672:15672 rabbitmq:3-management-alpine
-```
-
-Then, with a local SQL Server running:
+With a local SQL Server running and `.env`'s connection string also set as
+`ServiceBus:ConnectionString` (user-secrets or an environment variable)
+for `OrderService.Api` and `OrderService.Worker`:
 
 ### 1. Set up the databases
 
@@ -200,8 +250,9 @@ cd order-service/OrderService.Worker    && dotnet run   # consumer, no HTTP port
 cd web-app && npm install && npm start                  # :4200
 ```
 
-Start Product Service and Pricing Service before the Worker, and RabbitMQ
-before Order Service and the Worker — both connect to RabbitMQ on startup.
+Start Product Service and Pricing Service before the Worker — Order
+Service and the Worker both connect to Azure Service Bus independently on
+startup, no local broker needed.
 
 ## Run the tests
 
@@ -212,7 +263,7 @@ cd order-service && dotnet test OrderService.Worker.Tests
 ```
 
 Covers, among others:
-- Order creation saves `Submitted` and publishes `OrderSubmitted`
+- Order creation saves `Submitted` and sends `OrderSubmitted`
   (`OrderProcessingServiceTests`)
 - An `Idempotency-Key` retry returns the original order instead of a
   duplicate (`OrderProcessingServiceTests`)
@@ -241,7 +292,7 @@ variables `productBaseUrl` / `orderBaseUrl` / `pricingBaseUrl` default to
 | Duplicate message ≠ duplicate work | `OrderService.Worker/Consumers/OrderSubmittedConsumer.cs` | checks a local "processed messages" table (the **inbox** pattern) before reducing stock |
 | Duplicate client request ≠ duplicate order | `OrderService.Api/Controllers/OrdersController.cs` + `OrderProcessingService.cs` | `Idempotency-Key` header, unique DB index |
 | Order saved ⟺ event published, atomically | `OrderService.Api/Services/OrderProcessingService.cs`, `OrderDbContext.cs` | MassTransit's EF Core **transactional outbox** |
-| Concurrency limits | `OrderService.Worker/Program.cs`, `Clients/ConcurrencyLimitingHandler.cs` | `ConcurrentMessageLimit` on the RabbitMQ receive endpoint; a semaphore-based `DelegatingHandler` on outbound HTTP calls |
+| Concurrency limits | `OrderService.Worker/Program.cs`, `Clients/ConcurrencyLimitingHandler.cs` | `ConcurrentMessageLimit` on the Service Bus receive endpoint; a semaphore-based `DelegatingHandler` on outbound HTTP calls |
 | HTTP timeouts + circuit breaker | `OrderService.Worker/Program.cs` | `AddStandardResilienceHandler()` on the Pricing Service client |
 | Connection pooling | everywhere HTTP is called | `IHttpClientFactory` typed clients — never `new HttpClient()` |
 
@@ -280,5 +331,5 @@ variables `productBaseUrl` / `orderBaseUrl` / `pricingBaseUrl` default to
    moves to "Rejected" instead, with a reason.
 5. `docker compose logs -f order-worker` while placing an order, to watch
    the stock check and pricing call happen in real time.
-6. Open http://localhost:15672 (guest/guest) to see the `order-submitted-queue`
-   queue and its message rate in RabbitMQ's own UI.
+6. Open the Service Bus namespace in the Azure Portal → **Queues** to see
+   `order-submitted-queue` take a message and drain it in real time.

@@ -1,3 +1,8 @@
+# Requires a .env file next to this one with:
+#   SERVICEBUS_CONNECTION_STRING=Endpoint=sb://<namespace>.servicebus.windows.net/;SharedAccessKeyName=...;SharedAccessKey=...
+# Get it from the Azure Portal: Service Bus namespace -> Shared access policies
+# -> RootManageSharedAccessKey -> Primary Connection String. .env is
+# gitignored — never commit this value.
 services:
   sqlserver:
     image: mcr.microsoft.com/mssql/server:2022-latest
@@ -11,19 +16,6 @@ services:
       - mssql-data:/var/opt/mssql
     healthcheck:
       test: ["CMD-SHELL", "/opt/mssql-tools18/bin/sqlcmd -C -S localhost -U sa -P \"$$MSSQL_SA_PASSWORD\" -Q 'SELECT 1' || exit 1"]
-      interval: 10s
-      timeout: 5s
-      retries: 10
-      start_period: 20s
-
-  rabbitmq:
-    image: rabbitmq:3-management-alpine
-    container_name: order-system-rabbitmq
-    ports:
-      - "5672:5672" # AMQP (used by MassTransit)
-      - "15672:15672" # Management UI — http://localhost:15672 (guest/guest)
-    healthcheck:
-      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
       interval: 10s
       timeout: 5s
       retries: 10
@@ -51,16 +43,12 @@ services:
     depends_on:
       sqlserver:
         condition: service_healthy
-      rabbitmq:
-        condition: service_healthy
       product-service:
         condition: service_started
     environment:
       ASPNETCORE_ENVIRONMENT: Docker
       ConnectionStrings__OrderDb: Server=sqlserver,1433;Database=OrderDb;User Id=sa;Password=${SA_PASSWORD:-Your_password123!};TrustServerCertificate=True
-      RabbitMq__Host: rabbitmq
-      RabbitMq__Username: guest
-      RabbitMq__Password: guest
+      ServiceBus__ConnectionString: ${SERVICEBUS_CONNECTION_STRING}
     ports:
       - "5002:8080"
 
@@ -80,17 +68,13 @@ services:
       dockerfile: order-service/OrderService.Worker/Dockerfile
     container_name: order-system-order-worker
     depends_on:
-      rabbitmq:
-        condition: service_healthy
       product-service:
         condition: service_started
       pricing-service:
         condition: service_started
     environment:
       DOTNET_ENVIRONMENT: Docker
-      RabbitMq__Host: rabbitmq
-      RabbitMq__Username: guest
-      RabbitMq__Password: guest
+      ServiceBus__ConnectionString: ${SERVICEBUS_CONNECTION_STRING}
       ProductService__BaseUrl: http://product-service:8080
       PricingService__BaseUrl: http://pricing-service:8080
     volumes:

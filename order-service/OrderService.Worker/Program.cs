@@ -45,19 +45,21 @@ builder.Services.AddMassTransit(x =>
 {
     x.AddConsumer<OrderSubmittedConsumer>();
 
-    x.UsingRabbitMq((context, cfg) =>
+    x.UsingAzureServiceBus((context, cfg) =>
     {
-        cfg.Host(builder.Configuration["RabbitMq:Host"] ?? "localhost", "/", h =>
-        {
-            h.Username(builder.Configuration["RabbitMq:Username"] ?? "guest");
-            h.Password(builder.Configuration["RabbitMq:Password"] ?? "guest");
-        });
+        var connectionString = builder.Configuration["ServiceBus:ConnectionString"]
+            ?? throw new InvalidOperationException("ServiceBus:ConnectionString is not configured.");
+        cfg.Host(connectionString);
 
-        // "order-submitted-queue" is the queue this worker consumes from.
-        // Explicit name (rather than ConfigureEndpoints' auto-generated one)
-        // so it reads clearly in the RabbitMQ management UI and in docs.
+        // "order-submitted-queue" is the queue this worker consumes from —
+        // created explicitly (not auto-generated) so it reads clearly in
+        // the Service Bus Explorer and in docs. See the Basic-tier/queue
+        // vs. topic reasoning in OrderService.Api/Program.cs.
         cfg.ReceiveEndpoint("order-submitted-queue", e =>
         {
+            e.PublishFaults = false; // faults use Publish internally; Basic tier has no topics for them
+            e.ConfigureConsumeTopology = false; // Basic tier has no topics; we only ever Send to this queue directly
+
             e.UseMessageRetry(r => r.Exponential(
                 retryLimit: 5,
                 minInterval: TimeSpan.FromSeconds(1),

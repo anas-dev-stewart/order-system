@@ -90,7 +90,8 @@ public class OrderStatusConsumersTests : IAsyncLifetime
     public async Task OrderApproved_RedeliveredForAlreadyApprovedOrder_DoesNotChangePrice()
     {
         // Simulates duplicate delivery of the same event (e.g. the worker's
-        // ack to RabbitMQ was lost after it had already published once).
+        // completion ack to Azure Service Bus was lost after it had
+        // already sent once).
         var order = await SeedOrderAsync(OrderStatus.Approved);
         order.UnitPrice = 25m;
         order.TotalPrice = 50m;
