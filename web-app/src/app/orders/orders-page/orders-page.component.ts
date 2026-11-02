@@ -4,7 +4,7 @@ import { FormsModule } from '@angular/forms';
 import { HttpErrorResponse } from '@angular/common/http';
 import { OrderService } from '../../services/order.service';
 import { ProductService } from '../../services/product.service';
-import { Order } from '../../models/order.model';
+import { Order, OrderStatus } from '../../models/order.model';
 import { Product } from '../../models/product.model';
 
 @Component({
@@ -57,6 +57,10 @@ export class OrdersPageComponent implements OnInit {
 
   productName(productId: number): string {
     return this.products.find((p) => p.id === productId)?.name ?? `#${productId}`;
+  }
+
+  statusLabel(status: OrderStatus): string {
+    return OrderStatus[status] ?? `Unknown (${status})`;
   }
 
   placeOrder(): void {
